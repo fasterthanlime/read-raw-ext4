@@ -7,6 +7,25 @@ use std::convert::TryFrom;
 use std::fs::OpenOptions;
 
 #[derive(Debug)]
+#[allow(dead_code)]
+struct Extent {
+    len: u64,
+    start: u64,
+}
+
+impl Extent {
+    fn new(slice: &dyn ReadAt) -> Result<Self> {
+        let r = Reader::new(slice);
+        Ok(Self {
+            len: r.u16(0x4)? as u64,
+            // the block number the extent points to is split
+            // between upper 16-bits and lower 32-bits.
+            start: ((r.u16(0x6)? as u64) << 32) + r.u32(0x8)? as u64,
+        })
+    }
+}
+
+#[derive(Debug)]
 struct ExtentHeader {
     entries: u64,
     depth: u64,
@@ -189,14 +208,19 @@ fn main() -> Result<()> {
     let file = OpenOptions::new().read(true).open("/dev/sda3")?;
 
     let sb = Superblock::new(&file)?;
-    println!("{sb:#?}");
 
     let root_inode = InodeNumber(2).inode(&sb, &file)?;
     let root_inode_type = root_inode.filetype();
     println!("({root_inode_type:?}) {root_inode:#?}");
 
     let ext_header = ExtentHeader::new(&Slice::new(&root_inode.block, 0, Some(12)))?;
-    println!("{:#?}", ext_header);
+    println!("{ext_header:#?}");
+
+    assert_eq!(ext_header.depth, 0);
+    assert_eq!(ext_header.entries, 1);
+
+    let ext = Extent::new(&Slice::new(&root_inode.block, 12, Some(12)))?;
+    println!("{:#?}", ext);
 
     Ok(())
 }
