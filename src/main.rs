@@ -2,7 +2,7 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use color_eyre::Result;
 use custom_debug::Debug as CustomDebug;
 use num_enum::*;
-use positioned_io::{Cursor, ReadAt, Slice};
+use positioned_io::{Cursor, ReadAt, Size, Slice};
 use std::convert::TryFrom;
 use std::fs::OpenOptions;
 
@@ -101,16 +101,24 @@ impl Inode {
         Filetype::try_from(self.mode & 0xF000).unwrap()
     }
 
-    fn data<T>(&self, sb: &Superblock, dev: T) -> Result<Slice<T>>
+    fn data_count(&self) -> Result<u64> {
+        let ext_header = ExtentHeader::new(&Slice::new(&self.block, 0, Some(12)))?;
+        assert_eq!(ext_header.depth, 0);
+        Ok(ext_header.entries)
+    }
+
+    // new! this method takes an index parameter 👇
+    fn data<T>(&self, sb: &Superblock, dev: T, index: u64) -> Result<Slice<T>>
     where
         T: ReadAt,
     {
         let ext_header = ExtentHeader::new(&Slice::new(&self.block, 0, Some(12)))?;
         assert_eq!(ext_header.depth, 0);
-        assert_eq!(ext_header.entries, 1);
+        assert!(index < ext_header.entries);
 
-        let ext = Extent::new(&Slice::new(&self.block, 12, Some(12)))?;
-        assert_eq!(ext.len, 1);
+        // 👇 new: the offset depends of the index
+        let offset = 12 * (index + 1);
+        let ext = Extent::new(&Slice::new(&self.block, offset, Some(12)))?;
 
         let offset = ext.start * sb.block_size;
         let len = ext.len * sb.block_size;
@@ -118,19 +126,32 @@ impl Inode {
     }
 
     fn dir_entries(&self, sb: &Superblock, dev: &dyn ReadAt) -> Result<Vec<DirectoryEntry>> {
-        let data = self.data(sb, dev)?;
-
         let mut entries = Vec::new();
-        let mut offset: u64 = 0;
-        loop {
-            let entry = DirectoryEntry::new(&Slice::new(&data, offset, None))?;
-            if entry.inode.0 == 0 {
-                break;
+
+        for block_index in 0..self.data_count()? {
+            let data = self.data(sb, dev, block_index)?;
+            let data_size = data.size()?.unwrap();
+            let mut offset: u64 = 0;
+            while offset < data_size {
+                let entry = DirectoryEntry::new(&Slice::new(&data, offset, None))?;
+                if entry.inode.0 == 0 {
+                    break;
+                }
+                offset += entry.len;
+                entries.push(entry);
             }
-            offset += entry.len;
-            entries.push(entry);
         }
+
         Ok(entries)
+    }
+
+    fn child(&self, name: &str, sb: &Superblock, dev: &dyn ReadAt) -> Result<Option<InodeNumber>> {
+        let entries = self.dir_entries(sb, dev)?;
+        Ok(entries
+            .into_iter()
+            .filter(|x| x.name == name)
+            .map(|x| x.inode)
+            .next())
     }
 }
 
@@ -261,6 +282,8 @@ impl<IO: ReadAt> Reader<IO> {
 }
 
 fn main() -> Result<()> {
+    color_eyre::install()?;
+
     // open our ext4 partition, READ-ONLY.
     let file = OpenOptions::new().read(true).open("/dev/sda3")?;
 
@@ -270,8 +293,19 @@ fn main() -> Result<()> {
     let root_inode_type = root_inode.filetype();
     println!("({root_inode_type:?}) {root_inode:#?}");
 
-    let root_entries = root_inode.dir_entries(&sb, &file)?;
-    println!("{root_entries:#?}");
+    let etc_inode = root_inode
+        .child("etc", &sb, &file)?
+        .expect("/etc should exist")
+        .inode(&sb, &file)?;
+    let etc_inode_type = etc_inode.filetype();
+    println!("({etc_inode_type:?}) {etc_inode:#?}");
+
+    let hosts_inode = etc_inode
+        .child("hosts", &sb, &file)?
+        .expect("/etc/hosts should exist")
+        .inode(&sb, &file)?;
+    let hosts_inode_type = hosts_inode.filetype();
+    println!("({hosts_inode_type:?}) {hosts_inode:#?}");
 
     Ok(())
 }
