@@ -15,17 +15,24 @@ impl<IO: ReadAt> Reader<IO> {
         let mut cursor = Cursor::new_pos(&self.inner, offset);
         Ok(cursor.read_u16::<LittleEndian>()?)
     }
+
+    fn u32(&self, offset: u64) -> color_eyre::Result<u32> {
+        let mut cursor = Cursor::new_pos(&self.inner, offset);
+        Ok(cursor.read_u32::<LittleEndian>()?)
+    }
 }
 
 fn main() -> color_eyre::Result<()> {
     let file = OpenOptions::new().read(true).open("/dev/sda3")?;
 
-    // create a slice that corresponds to the superblock
     let r = Reader::new(Slice::new(file, 1024, None));
 
-    // as per the docs
     let magic = r.u16(0x38)?;
     println!("magic = {:x}", magic);
+
+    let n = r.u32(0x18)?;
+    let block_size = 1 << (10 + n);
+    println!("block_size = {}", block_size);
 
     Ok(())
 }
