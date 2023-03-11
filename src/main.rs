@@ -1,6 +1,5 @@
 use byteorder::{LittleEndian, ReadBytesExt};
 use custom_debug::Debug as CustomDebug;
-use hex_slice::AsHex;
 use positioned_io::{Cursor, ReadAt, Slice};
 use std::fs::OpenOptions;
 
@@ -28,12 +27,28 @@ impl BlockGroupNumber {
         let offset = gdt_start + self.0 * BlockGroupDescriptor::SIZE;
         Slice::new(dev, offset, None)
     }
+
+    fn desc(self, sb: &Superblock, dev: &dyn ReadAt) -> color_eyre::Result<BlockGroupDescriptor> {
+        let slice = self.desc_slice(sb, dev);
+        BlockGroupDescriptor::new(&slice)
+    }
 }
 
-struct BlockGroupDescriptor {}
+#[derive(Debug)]
+struct BlockGroupDescriptor {
+    #[allow(dead_code)]
+    inode_table: u64,
+}
 
 impl BlockGroupDescriptor {
     const SIZE: u64 = 64;
+
+    fn new(slice: &dyn ReadAt) -> color_eyre::Result<Self> {
+        let r = Reader::new(slice);
+        Ok(Self {
+            inode_table: r.u64_lohi(0x8, 0x28)?,
+        })
+    }
 }
 
 #[derive(CustomDebug)]
@@ -79,6 +94,10 @@ impl<IO: ReadAt> Reader<IO> {
         let mut cursor = Cursor::new_pos(&self.inner, offset);
         Ok(cursor.read_u32::<LittleEndian>()?)
     }
+
+    fn u64_lohi(&self, lo: u64, hi: u64) -> color_eyre::Result<u64> {
+        Ok(self.u32(lo)? as u64 + ((self.u32(hi)? as u64) << 32))
+    }
 }
 
 fn main() -> color_eyre::Result<()> {
@@ -88,12 +107,8 @@ fn main() -> color_eyre::Result<()> {
     let sb = Superblock::new(&file)?;
     println!("{sb:#?}");
 
-    let root_bg = InodeNumber(2).blockgroup_number(&sb);
-    dbg!(&root_bg);
-
-    let mut buf = vec![0u8; 64];
-    root_bg.desc_slice(&sb, &file).read_at(0, &mut buf)?;
-    println!("{:x}", buf.as_hex());
+    let bgd = InodeNumber(2).blockgroup_number(&sb).desc(&sb, &file)?;
+    println!("{bgd:#?}");
 
     Ok(())
 }
