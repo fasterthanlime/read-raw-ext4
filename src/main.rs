@@ -1,15 +1,31 @@
-use hex_slice::AsHex;
-use positioned_io::ReadAt;
+use byteorder::{LittleEndian, ReadBytesExt};
+use positioned_io::{Cursor, ReadAt, Slice};
 use std::fs::OpenOptions;
 
-fn main() -> Result<(), std::io::Error> {
+struct Reader<IO> {
+    inner: IO,
+}
+
+impl<IO: ReadAt> Reader<IO> {
+    fn new(inner: IO) -> Self {
+        Self { inner }
+    }
+
+    fn u16(&self, offset: u64) -> color_eyre::Result<u16> {
+        let mut cursor = Cursor::new_pos(&self.inner, offset);
+        Ok(cursor.read_u16::<LittleEndian>()?)
+    }
+}
+
+fn main() -> color_eyre::Result<()> {
     let file = OpenOptions::new().read(true).open("/dev/sda3")?;
-    let mut buf = vec![0u8; 128];
 
-    // read 128 bytes of the file starting at offset 1024
-    file.read_exact_at(1024, &mut buf)?;
+    // create a slice that corresponds to the superblock
+    let r = Reader::new(Slice::new(file, 1024, None));
 
-    println!("{:x}", buf.as_hex());
+    // as per the docs
+    let magic = r.u16(0x38)?;
+    println!("magic = {:x}", magic);
 
     Ok(())
 }

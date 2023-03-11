@@ -6,5 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+byteorder = "1.4"
+color-eyre = "0.6"
 hex-slice = "0.1.4"
 positioned-io = "0.3"
