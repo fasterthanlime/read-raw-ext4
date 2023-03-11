@@ -307,5 +307,11 @@ fn main() -> Result<()> {
     let hosts_inode_type = hosts_inode.filetype();
     println!("({hosts_inode_type:?}) {hosts_inode:#?}");
 
+    let hosts_data = hosts_inode.data(&sb, &file, 0)?;
+    let hosts_data = Reader::new(&hosts_data).vec(0, hosts_inode.size as usize)?;
+    let hosts_data = String::from_utf8_lossy(&hosts_data);
+    println!("---------------------------------------------");
+    println!("{hosts_data}");
+
     Ok(())
 }
