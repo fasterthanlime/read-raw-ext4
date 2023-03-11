@@ -284,8 +284,12 @@ impl<IO: ReadAt> Reader<IO> {
 fn main() -> Result<()> {
     color_eyre::install()?;
 
+    let dev_path = std::env::args()
+        .nth(1)
+        .expect("Usage: read-raw-ext4 <device>");
+
     // open our ext4 partition, READ-ONLY.
-    let file = OpenOptions::new().read(true).open("/dev/sda3")?;
+    let file = OpenOptions::new().read(true).open(dev_path)?;
 
     let sb = Superblock::new(&file)?;
 
