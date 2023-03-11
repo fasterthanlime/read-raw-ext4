@@ -1,7 +1,40 @@
 use byteorder::{LittleEndian, ReadBytesExt};
 use custom_debug::Debug as CustomDebug;
+use hex_slice::AsHex;
 use positioned_io::{Cursor, ReadAt, Slice};
 use std::fs::OpenOptions;
+
+#[derive(Debug, Clone, Copy)]
+struct InodeNumber(u64);
+
+impl InodeNumber {
+    fn blockgroup_number(self, sb: &Superblock) -> BlockGroupNumber {
+        let n = (self.0 - 1) / sb.inodes_per_group;
+        BlockGroupNumber(n)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BlockGroupNumber(u64);
+
+impl BlockGroupNumber {
+    fn desc_slice<T>(self, sb: &Superblock, dev: T) -> Slice<T>
+    where
+        T: ReadAt,
+    {
+        assert!(sb.block_size != 1024, "1024 block size not supported");
+        // the superblock takes up 1 block
+        let gdt_start = sb.block_size;
+        let offset = gdt_start + self.0 * BlockGroupDescriptor::SIZE;
+        Slice::new(dev, offset, None)
+    }
+}
+
+struct BlockGroupDescriptor {}
+
+impl BlockGroupDescriptor {
+    const SIZE: u64 = 64;
+}
 
 #[derive(CustomDebug)]
 struct Superblock {
@@ -54,6 +87,13 @@ fn main() -> color_eyre::Result<()> {
 
     let sb = Superblock::new(&file)?;
     println!("{sb:#?}");
+
+    let root_bg = InodeNumber(2).blockgroup_number(&sb);
+    dbg!(&root_bg);
+
+    let mut buf = vec![0u8; 64];
+    root_bg.desc_slice(&sb, &file).read_at(0, &mut buf)?;
+    println!("{:x}", buf.as_hex());
 
     Ok(())
 }
