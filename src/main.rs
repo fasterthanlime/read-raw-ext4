@@ -1,7 +1,30 @@
 use byteorder::{LittleEndian, ReadBytesExt};
+use color_eyre::Result;
 use custom_debug::Debug as CustomDebug;
 use positioned_io::{Cursor, ReadAt, Slice};
 use std::fs::OpenOptions;
+
+#[derive(CustomDebug)]
+struct Inode {
+    #[debug(format = "{:o}")]
+    mode: u16,
+    size: u64,
+
+    #[debug(skip)]
+    #[allow(dead_code)]
+    block: Vec<u8>,
+}
+
+impl Inode {
+    fn new(slice: &dyn ReadAt) -> Result<Self> {
+        let r = Reader::new(slice);
+        Ok(Self {
+            mode: r.u16(0x0)?,
+            size: r.u64_lohi(0x4, 0x6C)?,
+            block: r.vec(0x28, 60)?,
+        })
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 struct InodeNumber(u64);
@@ -10,6 +33,24 @@ impl InodeNumber {
     fn blockgroup_number(self, sb: &Superblock) -> BlockGroupNumber {
         let n = (self.0 - 1) / sb.inodes_per_group;
         BlockGroupNumber(n)
+    }
+
+    // in impl InodeNumber
+    fn inode_slice<T>(self, sb: &Superblock, dev: T) -> Result<Slice<T>>
+    where
+        T: ReadAt,
+    {
+        let desc = self.blockgroup_number(sb).desc(sb, &dev)?;
+        let table_off = desc.inode_table * sb.block_size;
+        let idx_in_table = (self.0 - 1) % sb.inodes_per_group;
+        let inode_off = table_off + sb.inode_size * idx_in_table;
+        Ok(Slice::new(dev, inode_off, Some(sb.inode_size)))
+    }
+
+    // in impl InodeNumber
+    fn inode(self, sb: &Superblock, dev: &dyn ReadAt) -> Result<Inode> {
+        let slice = self.inode_slice(sb, dev)?;
+        Inode::new(&slice)
     }
 }
 
@@ -28,7 +69,7 @@ impl BlockGroupNumber {
         Slice::new(dev, offset, None)
     }
 
-    fn desc(self, sb: &Superblock, dev: &dyn ReadAt) -> color_eyre::Result<BlockGroupDescriptor> {
+    fn desc(self, sb: &Superblock, dev: &dyn ReadAt) -> Result<BlockGroupDescriptor> {
         let slice = self.desc_slice(sb, dev);
         BlockGroupDescriptor::new(&slice)
     }
@@ -43,7 +84,7 @@ struct BlockGroupDescriptor {
 impl BlockGroupDescriptor {
     const SIZE: u64 = 64;
 
-    fn new(slice: &dyn ReadAt) -> color_eyre::Result<Self> {
+    fn new(slice: &dyn ReadAt) -> Result<Self> {
         let r = Reader::new(slice);
         Ok(Self {
             inode_table: r.u64_lohi(0x8, 0x28)?,
@@ -62,7 +103,7 @@ struct Superblock {
 }
 
 impl Superblock {
-    fn new(dev: &dyn ReadAt) -> color_eyre::Result<Self> {
+    fn new(dev: &dyn ReadAt) -> Result<Self> {
         let r = Reader::new(Slice::new(dev, 1024, None));
         // note: we're casting a few fields to `u64` now.
         // this will save us a bunch of grief later.
@@ -85,30 +126,36 @@ impl<IO: ReadAt> Reader<IO> {
         Self { inner }
     }
 
-    fn u16(&self, offset: u64) -> color_eyre::Result<u16> {
+    fn u16(&self, offset: u64) -> Result<u16> {
         let mut cursor = Cursor::new_pos(&self.inner, offset);
         Ok(cursor.read_u16::<LittleEndian>()?)
     }
 
-    fn u32(&self, offset: u64) -> color_eyre::Result<u32> {
+    fn u32(&self, offset: u64) -> Result<u32> {
         let mut cursor = Cursor::new_pos(&self.inner, offset);
         Ok(cursor.read_u32::<LittleEndian>()?)
     }
 
-    fn u64_lohi(&self, lo: u64, hi: u64) -> color_eyre::Result<u64> {
+    fn u64_lohi(&self, lo: u64, hi: u64) -> Result<u64> {
         Ok(self.u32(lo)? as u64 + ((self.u32(hi)? as u64) << 32))
+    }
+
+    fn vec(&self, offset: u64, len: usize) -> Result<Vec<u8>> {
+        let mut v = vec![0u8; len];
+        self.inner.read_exact_at(offset, &mut v)?;
+        Ok(v)
     }
 }
 
-fn main() -> color_eyre::Result<()> {
+fn main() -> Result<()> {
     // open our ext4 partition, READ-ONLY.
     let file = OpenOptions::new().read(true).open("/dev/sda3")?;
 
     let sb = Superblock::new(&file)?;
     println!("{sb:#?}");
 
-    let bgd = InodeNumber(2).blockgroup_number(&sb).desc(&sb, &file)?;
-    println!("{bgd:#?}");
+    let root_inode = InodeNumber(2).inode(&sb, &file)?;
+    println!("{root_inode:#?}");
 
     Ok(())
 }
