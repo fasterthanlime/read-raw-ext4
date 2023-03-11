@@ -1,8 +1,22 @@
 use byteorder::{LittleEndian, ReadBytesExt};
 use color_eyre::Result;
 use custom_debug::Debug as CustomDebug;
+use num_enum::*;
 use positioned_io::{Cursor, ReadAt, Slice};
+use std::convert::TryFrom;
 use std::fs::OpenOptions;
+
+#[derive(Debug, TryFromPrimitive)]
+#[repr(u16)]
+enum Filetype {
+    Fifo = 0x1000,
+    CharacterDevice = 0x2000,
+    Directory = 0x4000,
+    BlockDevice = 0x6000,
+    Regular = 0x8000,
+    SymbolicLink = 0xA000,
+    Socket = 0xC000,
+}
 
 #[derive(CustomDebug)]
 struct Inode {
@@ -23,6 +37,10 @@ impl Inode {
             size: r.u64_lohi(0x4, 0x6C)?,
             block: r.vec(0x28, 60)?,
         })
+    }
+
+    fn filetype(&self) -> Filetype {
+        Filetype::try_from(self.mode & 0xF000).unwrap()
     }
 }
 
@@ -155,7 +173,8 @@ fn main() -> Result<()> {
     println!("{sb:#?}");
 
     let root_inode = InodeNumber(2).inode(&sb, &file)?;
-    println!("{root_inode:#?}");
+    let root_inode_type = root_inode.filetype();
+    println!("({root_inode_type:?}) {root_inode:#?}");
 
     Ok(())
 }
