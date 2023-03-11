@@ -6,6 +6,26 @@ use positioned_io::{Cursor, ReadAt, Slice};
 use std::convert::TryFrom;
 use std::fs::OpenOptions;
 
+#[derive(CustomDebug)]
+struct DirectoryEntry {
+    #[debug(skip)]
+    len: u64,
+    inode: InodeNumber,
+    name: String,
+}
+
+impl DirectoryEntry {
+    fn new(slice: &dyn ReadAt) -> Result<Self> {
+        let r = Reader::new(slice);
+        let name_len = r.u8(0x6)? as usize;
+        Ok(Self {
+            inode: InodeNumber(r.u32(0x0)? as u64),
+            len: r.u16(0x4)? as u64,
+            name: String::from_utf8_lossy(&r.vec(0x8, name_len)?).into(),
+        })
+    }
+}
+
 #[derive(Debug)]
 #[allow(dead_code)]
 struct Extent {
@@ -95,6 +115,22 @@ impl Inode {
         let offset = ext.start * sb.block_size;
         let len = ext.len * sb.block_size;
         Ok(Slice::new(dev, offset, Some(len)))
+    }
+
+    fn dir_entries(&self, sb: &Superblock, dev: &dyn ReadAt) -> Result<Vec<DirectoryEntry>> {
+        let data = self.data(sb, dev)?;
+
+        let mut entries = Vec::new();
+        let mut offset: u64 = 0;
+        loop {
+            let entry = DirectoryEntry::new(&Slice::new(&data, offset, None))?;
+            if entry.inode.0 == 0 {
+                break;
+            }
+            offset += entry.len;
+            entries.push(entry);
+        }
+        Ok(entries)
     }
 }
 
@@ -198,6 +234,11 @@ impl<IO: ReadAt> Reader<IO> {
         Self { inner }
     }
 
+    fn u8(&self, offset: u64) -> Result<u8> {
+        let mut cursor = Cursor::new_pos(&self.inner, offset);
+        Ok(cursor.read_u8()?)
+    }
+
     fn u16(&self, offset: u64) -> Result<u16> {
         let mut cursor = Cursor::new_pos(&self.inner, offset);
         Ok(cursor.read_u16::<LittleEndian>()?)
@@ -229,9 +270,8 @@ fn main() -> Result<()> {
     let root_inode_type = root_inode.filetype();
     println!("({root_inode_type:?}) {root_inode:#?}");
 
-    let root_data = root_inode.data(&sb, &file)?;
-    let data_start = Reader::new(&root_data).vec(0, 128)?;
-    println!("{}", String::from_utf8_lossy(&data_start));
+    let root_entries = root_inode.dir_entries(&sb, &file)?;
+    println!("{root_entries:#?}");
 
     Ok(())
 }
