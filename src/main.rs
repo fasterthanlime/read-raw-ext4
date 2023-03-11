@@ -6,6 +6,25 @@ use positioned_io::{Cursor, ReadAt, Slice};
 use std::convert::TryFrom;
 use std::fs::OpenOptions;
 
+#[derive(Debug)]
+struct ExtentHeader {
+    entries: u64,
+    depth: u64,
+}
+
+impl ExtentHeader {
+    fn new(slice: &dyn ReadAt) -> Result<Self> {
+        let r = Reader::new(slice);
+        let magic = r.u16(0x0)?;
+        assert_eq!(magic, 0xF30A);
+
+        Ok(Self {
+            entries: r.u16(0x2)? as u64,
+            depth: r.u16(0x6)? as u64,
+        })
+    }
+}
+
 #[derive(Debug, TryFromPrimitive)]
 #[repr(u16)]
 enum Filetype {
@@ -175,6 +194,9 @@ fn main() -> Result<()> {
     let root_inode = InodeNumber(2).inode(&sb, &file)?;
     let root_inode_type = root_inode.filetype();
     println!("({root_inode_type:?}) {root_inode:#?}");
+
+    let ext_header = ExtentHeader::new(&Slice::new(&root_inode.block, 0, Some(12)))?;
+    println!("{:#?}", ext_header);
 
     Ok(())
 }
