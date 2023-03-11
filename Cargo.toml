@@ -8,5 +8,6 @@ edition = "2021"
 [dependencies]
 byteorder = "1.4"
 color-eyre = "0.6"
+custom_debug = "0.5"
 hex-slice = "0.1.4"
 positioned-io = "0.3"
