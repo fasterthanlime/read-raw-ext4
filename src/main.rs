@@ -80,6 +80,22 @@ impl Inode {
     fn filetype(&self) -> Filetype {
         Filetype::try_from(self.mode & 0xF000).unwrap()
     }
+
+    fn data<T>(&self, sb: &Superblock, dev: T) -> Result<Slice<T>>
+    where
+        T: ReadAt,
+    {
+        let ext_header = ExtentHeader::new(&Slice::new(&self.block, 0, Some(12)))?;
+        assert_eq!(ext_header.depth, 0);
+        assert_eq!(ext_header.entries, 1);
+
+        let ext = Extent::new(&Slice::new(&self.block, 12, Some(12)))?;
+        assert_eq!(ext.len, 1);
+
+        let offset = ext.start * sb.block_size;
+        let len = ext.len * sb.block_size;
+        Ok(Slice::new(dev, offset, Some(len)))
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -213,14 +229,9 @@ fn main() -> Result<()> {
     let root_inode_type = root_inode.filetype();
     println!("({root_inode_type:?}) {root_inode:#?}");
 
-    let ext_header = ExtentHeader::new(&Slice::new(&root_inode.block, 0, Some(12)))?;
-    println!("{ext_header:#?}");
-
-    assert_eq!(ext_header.depth, 0);
-    assert_eq!(ext_header.entries, 1);
-
-    let ext = Extent::new(&Slice::new(&root_inode.block, 12, Some(12)))?;
-    println!("{:#?}", ext);
+    let root_data = root_inode.data(&sb, &file)?;
+    let data_start = Reader::new(&root_data).vec(0, 128)?;
+    println!("{}", String::from_utf8_lossy(&data_start));
 
     Ok(())
 }
